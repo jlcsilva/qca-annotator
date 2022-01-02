@@ -1,0 +1,15 @@
+{
+  "files": {
+    "main.css": "/qca-annotator/static/css/main.046e66ea.css",
+    "main.js": "/qca-annotator/static/js/main.fb96b5d7.js",
+    "static/js/787.334bebb7.chunk.js": "/qca-annotator/static/js/787.334bebb7.chunk.js",
+    "index.html": "/qca-annotator/index.html",
+    "main.046e66ea.css.map": "/qca-annotator/static/css/main.046e66ea.css.map",
+    "main.fb96b5d7.js.map": "/qca-annotator/static/js/main.fb96b5d7.js.map",
+    "787.334bebb7.chunk.js.map": "/qca-annotator/static/js/787.334bebb7.chunk.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.046e66ea.css",
+    "static/js/main.fb96b5d7.js"
+  ]
+}
