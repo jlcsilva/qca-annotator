@@ -1,7 +1,8 @@
 import React from "react";
 import Grid from '@mui/material/Grid';
-import { Canvas, Line } from './Canvas'
+import { Canvas, PixelLine } from './Canvas'
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { IconButton } from "@mui/material";
 
 export type FrameProps = {
@@ -75,7 +76,7 @@ export class Frame extends React.Component<FrameProps, FrameState> {
   }
 
   // Propagate annotation lines from image to mask
-  public propagateLines = () => {
+  public propagateLinesToMask = () => {
     let lines = this.imageCanvas.current?.getLines();
     let imageData = this.maskCanvas.current?.getImageData();
     let image = imageData?.data as Uint8ClampedArray;
@@ -89,8 +90,9 @@ export class Frame extends React.Component<FrameProps, FrameState> {
       let startX = line.getStartX(), endX = line.getEndX(), startY = line.getStartY(), endY = line.getEndY();
       let deltaX = endX - startX;
       let deltaY = endY - startY;
-
       let slope: [number, number];
+
+      // Compute the slope from the starting to the finishing point
       if(Math.abs(deltaX) > Math.abs(deltaY)) {
         if(deltaX > 0) slope = [1, deltaY/Math.abs(deltaX)];
         else slope = [-1, deltaY/Math.abs(deltaX)];
@@ -103,17 +105,17 @@ export class Frame extends React.Component<FrameProps, FrameState> {
       let roundedRow = row, roundedCol = col; 
       let start = false;
       let maskStartX: number = 0, maskStartY: number = 0, maskEndX: number = 0, maskEndY: number = 0;
-
       while((deltaX > 0 ? row <= endX : row >= endX) && (deltaY > 0 ? col <= endY : col >= endY)) {
         index = roundedCol*rows*4 + roundedRow*4;
         if(image[index] === 255 && image[index+1] === 255 && image[index+2] === 255 && image[index+3] === 255) {
           if(start === false) {
             start = true;
-            maskStartY = roundedCol;
-            maskStartX = roundedRow;
+            maskStartY = col; maskStartX = row;
+            maskEndY = col; maskEndX = row;
+            image[index] = 0; image[index+2] = 0;
           } else {
-            maskEndY = roundedCol;
-            maskEndX = roundedRow;
+            maskEndY = col; maskEndX = row;
+            image[index] = 0; image[index+2] = 0;
           }
         } else if(image[index] === 0 && image[index+1] === 0 && image[index+2] === 0 && image[index+3] === 255) {
           // If we are over background and have already started the line, we break the cycle
@@ -123,9 +125,17 @@ export class Frame extends React.Component<FrameProps, FrameState> {
         roundedRow = Math.round(row); roundedCol = Math.round(col);
       }      
 
-      // Add the line to the maks and draw it
-      this.maskCanvas.current?.addLine(new Line({x: maskStartX, y: maskStartY}, {x: maskEndX, y: maskEndY}));
+      // Add the line to the mask and draw it
+      this.maskCanvas.current?.addPixelLine(new PixelLine({x: maskStartX, y: maskStartY}, {x: maskEndX, y: maskEndY}));
     })
+  }
+
+  // Propagate annotation lines from image to mask
+  public propagateLinesToImage = () => {
+    let lines = this.maskCanvas.current?.getLines();
+    // Check if there are enough lines
+    if(lines?.length !== 3) return;
+    lines?.forEach(line => { this.imageCanvas.current?.addLine(line); console.log(line); });
   }
 
   // Converts the name of a given mask to the name of the corresponding image
@@ -171,7 +181,9 @@ export class Frame extends React.Component<FrameProps, FrameState> {
             </Grid>  
         }
         <Grid item classes={{ root: "arrowItem" }} xs={1} sm={1} md={1}>
-          <IconButton color="primary" component="span" onClick={this.propagateLines}><ArrowForwardIcon/></IconButton>
+          <IconButton color="primary" component="span" onClick={this.propagateLinesToMask}><ArrowForwardIcon/></IconButton>
+          <br></br>
+          <IconButton color="primary" component="span" onClick={this.propagateLinesToImage}><ArrowBackIcon/></IconButton>
         </Grid>
         
         {
