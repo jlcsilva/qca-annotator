@@ -4,6 +4,12 @@ object-assign
 @license MIT
 */
 
+/*! cpexcel.js (C) 2013-present SheetJS -- http://sheetjs.com */
+
+/*! cputils.js (C) 2013-present SheetJS -- http://sheetjs.com */
+
+/*! xlsx.js (C) 2013-present SheetJS -- http://sheetjs.com */
+
 /** @license MUI v5.2.6
  *
  * This source code is licensed under the MIT license found in the
