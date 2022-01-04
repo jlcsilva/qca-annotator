@@ -1,9 +1,12 @@
 import React from "react";
 import Grid from '@mui/material/Grid';
-import { Canvas, PixelLine } from './Canvas'
+import { Canvas, Line, PixelLine } from './Canvas'
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { IconButton } from "@mui/material";
+import Slider from '@mui/material/Slider';
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button'; 
 
 export type FrameProps = {
   imageFile: File | null,
@@ -21,13 +24,19 @@ type FrameState = {
   patientID: number,
   primaryAngle: number,
   secondaryAngle: number,
-  frameNumber: number
+  frameNumber: number,
+
+  // Image display info
+  brightness: number,
+  contrast: number
 }
 
 export class Frame extends React.Component<FrameProps, FrameState> {
   private static suffix: string = 'a';
   private static maskRegExp: RegExp = new RegExp('([A-Z]|[a-z])+.png$');
   private static maxLines = 3;
+  private static defaultBrightness = 100;
+  private static defaultContrast = 100;
   private imageCanvas: React.RefObject<Canvas>;
   private maskCanvas: React.RefObject<Canvas>;
 
@@ -71,60 +80,54 @@ export class Frame extends React.Component<FrameProps, FrameState> {
       patientID: parseInt(parts[0]), 
       primaryAngle: parseFloat(parts[1]),
       secondaryAngle: parseFloat(parts[2]),
-      frameNumber: parseInt(parts[3])
+      frameNumber: parseInt(parts[3]),
+      brightness: Frame.defaultBrightness,
+      contrast: Frame.defaultContrast
     }
   }
 
   // Propagate annotation lines from image to mask
   public propagateLinesToMask = () => {
     let lines = this.imageCanvas.current?.getLines();
-    let imageData = this.maskCanvas.current?.getImageData();
-    let image = imageData?.data as Uint8ClampedArray;
-    //var rows = imageData?.height, cols = imageData?.width;
-    let rows = 512, cols = 512; // FIXME
+    let mask = this.maskCanvas.current?.getOriginalImageData() as Uint8ClampedArray;
+    let rows = this.maskCanvas.current?.getHeight() as number, cols = this.maskCanvas.current?.getWidth() as number;
 
     // Check if there are enough lines and whether the rows and cols values are defined
-    if(lines?.length !== 3 || !rows || !cols || !image) return;
+    if(lines?.length !== 3 || !rows || !cols || !mask) return;    
+    if(this.maskCanvas.current?.getLines().length === Frame.maxLines || this.maskCanvas.current?.getPixelLines().length === Frame.maxLines) return;
+    this.maskCanvas.current?.undoAll();
 
     lines?.forEach(line => {
       let startX = line.getStartX(), endX = line.getEndX(), startY = line.getStartY(), endY = line.getEndY();
-      let deltaX = endX - startX;
-      let deltaY = endY - startY;
+      let deltaX = endX - startX, deltaY = endY - startY;
       let slope: [number, number];
-
+      
       // Compute the slope from the starting to the finishing point
-      if(Math.abs(deltaX) > Math.abs(deltaY)) {
-        if(deltaX > 0) slope = [1, deltaY/Math.abs(deltaX)];
-        else slope = [-1, deltaY/Math.abs(deltaX)];
-      } else {
-        if(deltaY > 0) slope = [deltaX/Math.abs(deltaY), 1];
-        else slope = [deltaX/Math.abs(deltaY), -1];
-      }
+      if(Math.abs(deltaX) > Math.abs(deltaY)) slope = deltaX > 0 ? [1, deltaY/Math.abs(deltaX)] : [-1, deltaY/Math.abs(deltaX)];
+      else slope = deltaY > 0 ? [deltaX/Math.abs(deltaY), 1] : [deltaX/Math.abs(deltaY), -1];
 
       let row = startX, col = startY, index;
-      let roundedRow = row, roundedCol = col; 
+      let roundedRow = Math.round(row), roundedCol = Math.round(col); 
       let start = false;
       let maskStartX: number = 0, maskStartY: number = 0, maskEndX: number = 0, maskEndY: number = 0;
       while((deltaX > 0 ? row <= endX : row >= endX) && (deltaY > 0 ? col <= endY : col >= endY)) {
         index = roundedCol*rows*4 + roundedRow*4;
-        if(image[index] === 255 && image[index+1] === 255 && image[index+2] === 255 && image[index+3] === 255) {
+        if(mask[index] === 255 && mask[index+1] === 255 && mask[index+2] === 255 && mask[index+3] === 255) {
           if(start === false) {
             start = true;
             maskStartY = col; maskStartX = row;
             maskEndY = col; maskEndX = row;
-            image[index] = 0; image[index+2] = 0;
           } else {
             maskEndY = col; maskEndX = row;
-            image[index] = 0; image[index+2] = 0;
           }
-        } else if(image[index] === 0 && image[index+1] === 0 && image[index+2] === 0 && image[index+3] === 255) {
+        } else if(mask[index] === 0 && mask[index+1] === 0 && mask[index+2] === 0 && mask[index+3] === 255) {
           // If we are over background and have already started the line, we break the cycle
           if(start === true) break;
         }
+        // Go to the next position
         row += slope[0]; col += slope[1];
         roundedRow = Math.round(row); roundedCol = Math.round(col);
       }      
-
       // Add the line to the mask and draw it
       this.maskCanvas.current?.addPixelLine(new PixelLine({x: maskStartX, y: maskStartY}, {x: maskEndX, y: maskEndY}));
     })
@@ -132,10 +135,10 @@ export class Frame extends React.Component<FrameProps, FrameState> {
 
   // Propagate annotation lines from image to mask
   public propagateLinesToImage = () => {
-    let lines = this.maskCanvas.current?.getLines();
-    // Check if there are enough lines
-    if(lines?.length !== 3) return;
-    lines?.forEach(line => { this.imageCanvas.current?.addLine(line); console.log(line); });
+    let pixelLines = this.maskCanvas.current?.getPixelLines();
+    // Check if there are enough lines  
+    if(pixelLines?.length !== Frame.maxLines) return;
+    pixelLines?.forEach(pixelLine => { this.imageCanvas.current?.addLine(new Line(pixelLine.getStartPoint(), pixelLine.getEndPoint()));});
   }
 
   // Converts the name of a given mask to the name of the corresponding image
@@ -161,6 +164,36 @@ export class Frame extends React.Component<FrameProps, FrameState> {
     Frame.suffix = suffix;
   }
 
+  
+  private brightnessTimeoutID: any;
+  private handleBrightnessChange = (event: Event, value: number | number[]) => {
+    if(typeof value === "number") {
+      // Timeout to ensure smooth dragging
+      clearTimeout(this.brightnessTimeoutID)
+      this.brightnessTimeoutID = setTimeout(() => {
+        this.setState({brightness: value});
+        this.imageCanvas.current?.setBrightness(value);
+      }, 1)
+    }
+  }
+
+  private contrastTimeoutID: any;
+  private handleContrastChange = (event: Event, value: number | number[]) => {
+    if(typeof value === "number") {
+      // Timeout to ensure smooth dragging
+      clearTimeout(this.brightnessTimeoutID)
+      this.brightnessTimeoutID = setTimeout(() => {
+        this.setState({contrast: value});
+        this.imageCanvas.current?.setContrast(value);
+      }, 1)
+    }
+  }
+
+  private resetFilters = () => {
+    this.setState({brightness: Frame.defaultBrightness, contrast: Frame.defaultContrast});
+    this.imageCanvas.current?.setFilters(Frame.defaultBrightness, Frame.defaultContrast);
+  }
+
   public render(): JSX.Element {
     return (
       <Grid container rowSpacing={1} columnGap={0} key={this.state.imageName}>
@@ -169,11 +202,20 @@ export class Frame extends React.Component<FrameProps, FrameState> {
           <p>Primary Angle: { this.state.primaryAngle }º</p>
           <p>Secondary Angle: { this.state.secondaryAngle }º</p>
           <p>Frame Number: { this.state.frameNumber }</p>
+          <Box sx={{ width: "60%" }}>
+            Brightness
+            <Slider defaultValue={Frame.defaultBrightness} step={1} value={this.state.brightness} min={0} max={150} aria-label="Brightness" valueLabelDisplay="auto" onChange={this.handleBrightnessChange}/>
+          </Box>
+          <Box sx={{ width: "60%" }}>
+            Contrast
+            <Slider defaultValue={Frame.defaultContrast} step={1} value={this.state.contrast} min={0} max={1000} aria-label="Contrast" valueLabelDisplay="auto" onChange={this.handleContrastChange}/>
+          </Box>
+          <Button onClick={this.resetFilters}>Reset</Button>
         </Grid>
         {
           this.state.image ?
             <Grid item classes={{ root: "item" }} xs={4} sm={4} md={4}>
-                <Canvas ref={this.imageCanvas} backgroundImage={this.state.image} maxLines={Frame.maxLines}></Canvas>
+                <Canvas ref={this.imageCanvas} backgroundImage={this.state.image} maxLines={Frame.maxLines} brightness={this.state.brightness} contrast={this.state.contrast}></Canvas>
             </Grid>
           :
             <Grid item classes={{ root: "item" }} xs={4} sm={4} md={4}>
@@ -181,15 +223,16 @@ export class Frame extends React.Component<FrameProps, FrameState> {
             </Grid>  
         }
         <Grid item classes={{ root: "arrowItem" }} xs={1} sm={1} md={1}>
-          <IconButton color="primary" component="span" onClick={this.propagateLinesToMask}><ArrowForwardIcon/></IconButton>
-          <br></br>
-          <IconButton color="primary" component="span" onClick={this.propagateLinesToImage}><ArrowBackIcon/></IconButton>
+          <div>
+            <IconButton color="primary" component="span" onClick={this.propagateLinesToMask}><ArrowForwardIcon/></IconButton>
+            <br></br>
+            <IconButton color="primary" component="span" onClick={this.propagateLinesToImage}><ArrowBackIcon/></IconButton>
+          </div>
         </Grid>
-        
         {
           this.state.mask ?
             <Grid item classes={{ root: "item" }} xs={4} sm={4} md={4}>
-              <Canvas ref={this.maskCanvas} backgroundImage={this.state.mask} maxLines={Frame.maxLines}></Canvas>
+              <Canvas ref={this.maskCanvas} backgroundImage={this.state.mask} maxLines={Frame.maxLines} brightness={Frame.defaultBrightness} contrast={Frame.defaultContrast}></Canvas>
             </Grid>
           :
             <Grid item classes={{ root: "item" }} xs={4} sm={4} md={4}>
