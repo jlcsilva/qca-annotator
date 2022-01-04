@@ -7,6 +7,8 @@ import { IconButton } from "@mui/material";
 import Slider from '@mui/material/Slider';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button'; 
+import { saveAs } from "file-saver";
+import * as XLSX from "xlsx";
 
 export type FrameProps = {
   imageFile: File | null,
@@ -49,7 +51,7 @@ export class Frame extends React.Component<FrameProps, FrameState> {
 
     // If the name matched the file pattern of a mask name, it is the mask's name.
     // Otherwise it is the image's name
-    if(!Frame.testMaskRegex(this.props.name)) {
+    if(Frame.testMaskRegex(this.props.name)) {
       imageName = Frame.maskNameToImageName(this.props.name);
       maskName = this.props.name;
     } else {
@@ -165,33 +167,93 @@ export class Frame extends React.Component<FrameProps, FrameState> {
   }
 
   
-  private brightnessTimeoutID: any;
+  private brightnessTimeoutID: NodeJS.Timeout | null = null;
   private handleBrightnessChange = (event: Event, value: number | number[]) => {
     if(typeof value === "number") {
       // Timeout to ensure smooth dragging
-      clearTimeout(this.brightnessTimeoutID)
-      this.brightnessTimeoutID = setTimeout(() => {
+      if(this.brightnessTimeoutID === null) {
         this.setState({brightness: value});
         this.imageCanvas.current?.setBrightness(value);
-      }, 1)
+      } else {
+        clearTimeout(this.brightnessTimeoutID);
+        this.brightnessTimeoutID = setTimeout(() => {
+          this.setState({brightness: value});
+          this.imageCanvas.current?.setBrightness(value);
+        }, 1)
+      }
     }
   }
 
-  private contrastTimeoutID: any;
+  private contrastTimeoutID: NodeJS.Timeout | null = null;
   private handleContrastChange = (event: Event, value: number | number[]) => {
     if(typeof value === "number") {
       // Timeout to ensure smooth dragging
-      clearTimeout(this.brightnessTimeoutID)
-      this.brightnessTimeoutID = setTimeout(() => {
+      if(this.contrastTimeoutID === null) {
         this.setState({contrast: value});
         this.imageCanvas.current?.setContrast(value);
-      }, 1)
+      } else {
+        clearTimeout(this.contrastTimeoutID);
+        this.contrastTimeoutID = setTimeout(() => {
+          this.setState({contrast: value});
+          this.imageCanvas.current?.setContrast(value);
+        }, 1)
+      }
     }
   }
 
+  // Reset the brightness and contrast filters to their default values
   private resetFilters = () => {
     this.setState({brightness: Frame.defaultBrightness, contrast: Frame.defaultContrast});
     this.imageCanvas.current?.setFilters(Frame.defaultBrightness, Frame.defaultContrast);
+  }
+
+  // Get the annotated image and mask and download them
+  private downloadImageAndMask = () => {
+    let imageURL = this.imageCanvas.current?.getDownloadURL();
+    let maskURL = this.maskCanvas.current?.getDownloadURL();
+    if(imageURL !== undefined) saveAs(imageURL, this.state.imageName.replace('.png', '_qca.png'));
+    if(maskURL !== undefined) saveAs(maskURL, this.state.maskName.replace('.png', '_qca.png'));
+  }
+
+  // Fit column width to content, assuming the first row has the most columns
+  private fitToColumn(arrayOfArray: Array<Array<any>>) {
+    // get maximum character of each column
+    return arrayOfArray[0].map((a, i) => ({ wch: Math.max(...arrayOfArray.map(a2 => a2[i] ? a2[i].toString().length : 0)) }));
+  }
+  private s2ab = (s: any) => {
+    var buf = new ArrayBuffer(s.length);
+    var view = new Uint8Array(buf);
+    for(var i=0; i < s.length; i++) view[i] = s.charCodeAt(i) & 0xFF;
+    return buf;
+  }
+
+  private downloadExcel = () => {
+    var wb = XLSX.utils.book_new();
+    wb.Props = {
+      Title: this.state.imageName.replace('.png', '')
+    }
+
+    wb.SheetNames.push("Sheet 1");
+    var lines = this.imageCanvas.current?.getLines();
+    var diameters: number[] = [];
+    lines?.forEach((line) => { diameters.push(line.getLength()); });
+    var ws_data = [
+      ['Patient', 'Primary Angle', 'Secondary Angle', 'Frame Number', 'Type', 'Diameter 1', 'Diameter 2', 'Diameter 3', 'Diameter Stenosis', 'Area Stenosis'],
+      [this.state.patientID, this.state.primaryAngle, this.state.secondaryAngle, this.state.frameNumber, 'Image', ...diameters, (this.imageCanvas.current?.computeDiameterStenosisPercentage() as number)/100, (this.imageCanvas.current?.computeAreaStenosisPercentage() as number)/100],
+      [this.state.patientID, this.state.primaryAngle, this.state.secondaryAngle, this.state.frameNumber, 'Mask', ...diameters, (this.maskCanvas.current?.computeDiameterStenosisPercentage() as number)/100, (this.maskCanvas.current?.computeAreaStenosisPercentage() as number)/100]
+    ];
+    var ws = XLSX.utils.aoa_to_sheet(ws_data);
+    ws["!merges"] = [
+      { s: {r: 1, c: 0}, e: {r: 2, c: 0}}, 
+      { s: {r: 1, c: 1}, e: {r: 2, c: 1}},
+      { s: {r: 1, c: 2}, e: {r: 2, c: 2}},
+      { s: {r: 1, c: 3}, e: {r: 2, c: 3}},
+    ]
+    ws['!cols'] = this.fitToColumn(ws_data);
+    wb.Sheets["Sheet 1"] = ws;
+
+    var wbout = XLSX.write(wb, {bookType: 'xlsx', type: 'binary'});
+    saveAs(new Blob([this.s2ab(wbout)], {type: "application/octet-stream"}), 'test.xlsx');
   }
 
   public render(): JSX.Element {
@@ -214,11 +276,11 @@ export class Frame extends React.Component<FrameProps, FrameState> {
         </Grid>
         {
           this.state.image ?
-            <Grid item classes={{ root: "item" }} xs={4} sm={4} md={4}>
+            <Grid item classes={{ root: "item" }} xs={3} sm={3} md={3}>
                 <Canvas ref={this.imageCanvas} backgroundImage={this.state.image} maxLines={Frame.maxLines} brightness={this.state.brightness} contrast={this.state.contrast}></Canvas>
             </Grid>
           :
-            <Grid item classes={{ root: "item" }} xs={4} sm={4} md={4}>
+            <Grid item classes={{ root: "item" }} xs={3} sm={3} md={3}>
               <p>No matching image for mask {this.state.maskName}</p>
             </Grid>  
         }
@@ -231,14 +293,21 @@ export class Frame extends React.Component<FrameProps, FrameState> {
         </Grid>
         {
           this.state.mask ?
-            <Grid item classes={{ root: "item" }} xs={4} sm={4} md={4}>
+            <Grid item classes={{ root: "item" }} xs={3} sm={3} md={3}>
               <Canvas ref={this.maskCanvas} backgroundImage={this.state.mask} maxLines={Frame.maxLines} brightness={Frame.defaultBrightness} contrast={Frame.defaultContrast}></Canvas>
             </Grid>
           :
-            <Grid item classes={{ root: "item" }} xs={4} sm={4} md={4}>
+            <Grid item classes={{ root: "item" }} xs={3} sm={3} md={3}>
               <p>No matching mask for image {this.state.imageName}</p>
             </Grid>
         }
+        <Grid item classes={{ root: "arrowItem" }} xs={2} sm={2} md={2}>
+          <div>
+            <Button onClick={this.downloadImageAndMask}>Download Image and Mask</Button>
+            <br></br>
+            <Button onClick={this.downloadExcel}>Download Excel</Button>
+          </div>
+        </Grid>
       </Grid>
     );
   }

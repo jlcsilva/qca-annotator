@@ -262,7 +262,7 @@ export class Canvas extends React.Component<CanvasProps, CanvasState> {
   }
 
   // Given the three drawn lines or pixel lines, computes the associated diameter stenosis percentage
-  private computeDiameterStenosisPercentage = () => {
+  public computeDiameterStenosisPercentage = () => {
     var lengthsArray: number[] = [];
     if(this.state.lines.length !== this.props.maxLines && this.state.pixelLines.length !== this.props.maxLines) return undefined;
     else if(this.state.lines.length === this.props.maxLines) {
@@ -275,7 +275,7 @@ export class Canvas extends React.Component<CanvasProps, CanvasState> {
   }
 
   // Given the three drawn lines or pixel lines, computes the associated area stenosis percentage
-  private computeAreaStenosisPercentage = () => {
+  public computeAreaStenosisPercentage = () => {
     var lengthsArray: number[] = [];
     if(this.state.lines.length !== this.props.maxLines && this.state.pixelLines.length !== this.props.maxLines) return undefined;
     else if(this.state.lines.length === this.props.maxLines) {
@@ -322,6 +322,16 @@ export class Canvas extends React.Component<CanvasProps, CanvasState> {
     let p1 = this.transformPoint({x: 0, y: 0});
     let p2 = this.transformPoint({x: this.canvasRef.current?.width as number, y: this.canvasRef.current?.height as number});
     this.ctx?.clearRect(p1.x, p1.y, p2.x - p1.x, p2.y - p1.y);
+  }
+
+  public getDownloadURL = (): string | undefined => {
+    this.ctx?.restore();
+    this.ctx?.save();
+    this.clearCanvas();
+    this.ctx?.putImageData(this.originalImageData as ImageData, 0, 0);
+    this.state.lines.forEach((line) => line.draw(this.ctx as CanvasRenderingContext2D));
+    this.state.pixelLines.forEach((pixelLine) => pixelLine.draw(this.ctx as CanvasRenderingContext2D));
+    return this.canvasRef.current?.toDataURL("image/png");
   }
 
   private downloadImage = () => {
