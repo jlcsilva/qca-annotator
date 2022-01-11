@@ -1,6 +1,6 @@
 import React from "react";
 import Grid from '@mui/material/Grid';
-import { Canvas, Line, PixelLine } from './Canvas'
+import { Canvas } from './Canvas/Canvas'
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { IconButton } from "@mui/material";
@@ -8,7 +8,9 @@ import Slider from '@mui/material/Slider';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button'; 
 import { saveAs } from "file-saver";
-import * as XLSX from "xlsx";
+import { PixelLine } from "./Canvas/PixelLine";
+import { FluidLine } from "./Canvas/FluidLine";
+import { GenericLine } from "./Canvas/GenericLine";
 
 export type FrameProps = {
   imageFile: File | null,
@@ -100,7 +102,7 @@ export class Frame extends React.Component<FrameProps, FrameState> {
     this.maskCanvas.current?.undoAll();
 
     lines?.forEach(line => {
-      let startX = line.getStartX(), endX = line.getEndX(), startY = line.getStartY(), endY = line.getEndY();
+      let startX = line.startX, endX = line.endX, startY = line.startY, endY = line.endY;
       let deltaX = endX - startX, deltaY = endY - startY;
       let slope: [number, number];
       
@@ -140,7 +142,7 @@ export class Frame extends React.Component<FrameProps, FrameState> {
     let pixelLines = this.maskCanvas.current?.getPixelLines();
     // Check if there are enough lines  
     if(pixelLines?.length !== Frame.maxLines) return;
-    pixelLines?.forEach(pixelLine => { this.imageCanvas.current?.addLine(new Line(pixelLine.getStartPoint(), pixelLine.getEndPoint()));});
+    pixelLines?.forEach(pixelLine => { this.imageCanvas.current?.addLine(new FluidLine(pixelLine.startPoint, pixelLine.endPoint));});
   }
 
   // Converts the name of a given mask to the name of the corresponding image
@@ -170,15 +172,17 @@ export class Frame extends React.Component<FrameProps, FrameState> {
   private brightnessTimeoutID: NodeJS.Timeout | null = null;
   private handleBrightnessChange = (event: Event, value: number | number[]) => {
     if(typeof value === "number") {
+      if(this.imageCanvas.current) var image: Canvas = this.imageCanvas.current;
+      else return;
       // Timeout to ensure smooth dragging
       if(this.brightnessTimeoutID === null) {
         this.setState({brightness: value});
-        this.imageCanvas.current?.setBrightness(value);
+        image.brightness = value;
       } else {
         clearTimeout(this.brightnessTimeoutID);
         this.brightnessTimeoutID = setTimeout(() => {
           this.setState({brightness: value});
-          this.imageCanvas.current?.setBrightness(value);
+          image.brightness = value;
         }, 1)
       }
     }
@@ -188,14 +192,17 @@ export class Frame extends React.Component<FrameProps, FrameState> {
   private handleContrastChange = (event: Event, value: number | number[]) => {
     if(typeof value === "number") {
       // Timeout to ensure smooth dragging
+      if(this.imageCanvas.current) var image: Canvas = this.imageCanvas.current;
+      else return;
+      image = image as Canvas;
       if(this.contrastTimeoutID === null) {
         this.setState({contrast: value});
-        this.imageCanvas.current?.setContrast(value);
+        image.contrast = value;
       } else {
         clearTimeout(this.contrastTimeoutID);
         this.contrastTimeoutID = setTimeout(() => {
           this.setState({contrast: value});
-          this.imageCanvas.current?.setContrast(value);
+          image.contrast = value;
         }, 1)
       }
     }
@@ -208,58 +215,87 @@ export class Frame extends React.Component<FrameProps, FrameState> {
   }
 
   // Get the annotated image and mask and download them
-  private downloadImageAndMask = () => {
+  public downloadImageAndMask = () => {
+    this.downloadImage();
+    this.downloadMask();
+  }
+
+  public downloadImage = () => {
     let imageURL = this.imageCanvas.current?.getDownloadURL();
-    let maskURL = this.maskCanvas.current?.getDownloadURL();
     if(imageURL !== undefined) saveAs(imageURL, this.state.imageName.replace('.png', '_qca.png'));
+  }
+
+  public downloadMask = () => {
+    let maskURL = this.maskCanvas.current?.getDownloadURL();
     if(maskURL !== undefined) saveAs(maskURL, this.state.maskName.replace('.png', '_qca.png'));
   }
 
-  // Fit column width to content, assuming the first row has the most columns
-  private fitToColumn(arrayOfArray: Array<Array<any>>) {
-    // get maximum character of each column
-    return arrayOfArray[0].map((a, i) => ({ wch: Math.max(...arrayOfArray.map(a2 => a2[i] ? a2[i].toString().length : 0)) }));
-  }
-  private s2ab = (s: any) => {
-    var buf = new ArrayBuffer(s.length);
-    var view = new Uint8Array(buf);
-    for(var i=0; i < s.length; i++) view[i] = s.charCodeAt(i) & 0xFF;
-    return buf;
+  // Get the url of the image canvas content
+  public getImageURL = (): string => {
+    return this.imageCanvas.current ? this.imageCanvas.current.getDownloadURL() : "";
   }
 
-  private downloadExcel = () => {
-    var wb = XLSX.utils.book_new();
-    wb.Props = {
-      Title: this.state.imageName.replace('.png', '')
+  // Get the url of the mask canvas content
+  public getMaskURL = (): string => {
+    return this.maskCanvas.current ? this.maskCanvas.current.getDownloadURL() : "";
+  }
+
+  // Get the name of the image
+  public getImageName = (): string => {
+    return this.state.imageName ? this.state.imageName : "image.png";
+  }
+
+  // Get the name of the mask
+  public getMaskName = (): string => {
+    return this.state.maskName ? this.state.maskName : "mask.png";
+  }
+
+  // Converts the information associated to this frame to a spreadhseet row and returns it
+  public getSpreadsheetRow = (): (string | number)[][] => {
+    let image = this.imageCanvas.current, mask = this.maskCanvas.current;
+    let imageLines: (GenericLine)[] = [], maskLines: (GenericLine)[] = [];
+    if(image) {
+      imageLines = image.getLines().length !== 0 ? image.getLines() : image.getPixelLines();
+    }
+    if(mask) {
+      maskLines = mask.getLines().length !== 0 ? mask.getLines() : mask.getPixelLines();
+    }
+    let imageDiameters: number[] = [], maskDiameters: number[] = [];
+    imageLines?.forEach((line) => { imageDiameters.push(line.length) });
+    maskLines?.forEach((line) => { maskDiameters.push(line.length) });
+    let imageDiameterStenosis, imageAreaStenosis, maskDiameterStenosis, maskAreaStenosis;
+
+    if(imageDiameters?.length === Frame.maxLines) {
+      imageDiameterStenosis = (this.imageCanvas.current?.computeDiameterStenosisPercentage() as number)/100;
+      imageAreaStenosis = (this.imageCanvas.current?.computeAreaStenosisPercentage() as number)/100;
+    } else {
+      imageDiameterStenosis = "NaN";
+      imageAreaStenosis = "NaN";
+      if(imageDiameters === undefined) imageDiameters = [];
+      while(imageDiameters?.length < Frame.maxLines) (imageDiameters as any)?.push('NaN');
     }
 
-    wb.SheetNames.push("Sheet 1");
-    var lines = this.imageCanvas.current?.getLines();
-    var diameters: number[] = [];
-    lines?.forEach((line) => { diameters.push(line.getLength()); });
-    var ws_data = [
-      ['Patient', 'Primary Angle', 'Secondary Angle', 'Frame Number', 'Type', 'Diameter 1', 'Diameter 2', 'Diameter 3', 'Diameter Stenosis', 'Area Stenosis'],
-      [this.state.patientID, this.state.primaryAngle, this.state.secondaryAngle, this.state.frameNumber, 'Image', ...diameters, (this.imageCanvas.current?.computeDiameterStenosisPercentage() as number)/100, (this.imageCanvas.current?.computeAreaStenosisPercentage() as number)/100],
-      [this.state.patientID, this.state.primaryAngle, this.state.secondaryAngle, this.state.frameNumber, 'Mask', ...diameters, (this.maskCanvas.current?.computeDiameterStenosisPercentage() as number)/100, (this.maskCanvas.current?.computeAreaStenosisPercentage() as number)/100]
-    ];
-    var ws = XLSX.utils.aoa_to_sheet(ws_data);
-    ws["!merges"] = [
-      { s: {r: 1, c: 0}, e: {r: 2, c: 0}}, 
-      { s: {r: 1, c: 1}, e: {r: 2, c: 1}},
-      { s: {r: 1, c: 2}, e: {r: 2, c: 2}},
-      { s: {r: 1, c: 3}, e: {r: 2, c: 3}},
-    ]
-    ws['!cols'] = this.fitToColumn(ws_data);
-    wb.Sheets["Sheet 1"] = ws;
+    if(maskDiameters?.length === Frame.maxLines) {
+      maskDiameterStenosis = (this.maskCanvas.current?.computeDiameterStenosisPercentage() as number)/100;
+      maskAreaStenosis = (this.maskCanvas.current?.computeAreaStenosisPercentage() as number)/100;
+    } else {
+      maskDiameterStenosis = "NaN";
+      maskAreaStenosis = "NaN";
+      if(maskDiameters === undefined) maskDiameters = [];
+      while(maskDiameters?.length < Frame.maxLines) (maskDiameters as any)?.push('NaN');
+    }
 
-    var wbout = XLSX.write(wb, {bookType: 'xlsx', type: 'binary'});
-    saveAs(new Blob([this.s2ab(wbout)], {type: "application/octet-stream"}), 'test.xlsx');
+    let data = [
+      [this.state.patientID, this.state.primaryAngle, this.state.secondaryAngle, this.state.frameNumber, 'Image', ...imageDiameters, imageDiameterStenosis, imageAreaStenosis],
+      [this.state.patientID, this.state.primaryAngle, this.state.secondaryAngle, this.state.frameNumber, 'Mask', ...maskDiameters, maskDiameterStenosis, maskAreaStenosis]
+    ]
+    return data;
   }
 
   public render(): JSX.Element {
     return (
       <Grid container rowSpacing={1} columnGap={0} key={this.state.imageName}>
-        <Grid item xs={2} sm={2} md={2} display="flex" flexDirection="column" textAlign="center" alignItems="center" justifyContent="center">
+        <Grid item xs={3} sm={3} md={3} display="flex" flexDirection="column" textAlign="center" alignItems="center" justifyContent="center">
           <p>Patient ID: { this.state.patientID }</p>
           <p>Primary Angle: { this.state.primaryAngle }º</p>
           <p>Secondary Angle: { this.state.secondaryAngle }º</p>
@@ -301,13 +337,6 @@ export class Frame extends React.Component<FrameProps, FrameState> {
               <p>No matching mask for image {this.state.imageName}</p>
             </Grid>
         }
-        <Grid item classes={{ root: "arrowItem" }} xs={2} sm={2} md={2}>
-          <div>
-            <Button onClick={this.downloadImageAndMask}>Download Image and Mask</Button>
-            <br></br>
-            <Button onClick={this.downloadExcel}>Download Excel</Button>
-          </div>
-        </Grid>
       </Grid>
     );
   }
