@@ -1,6 +1,6 @@
 import { Point } from "./Point";
 
-export abstract class GenericLine {
+export default abstract class AbstractLine {
     private _startPoint: Point;
     private _endPoint: Point;
     private _length: number;

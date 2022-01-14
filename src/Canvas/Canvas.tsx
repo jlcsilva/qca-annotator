@@ -8,65 +8,81 @@ import ClearIcon from '@mui/icons-material/Clear';
 import { Point } from "./Point";
 import { PixelLine } from "./PixelLine";
 import { FluidLine } from "./FluidLine";
+import AbstractLine from "./AbstractLine";
 
-// Canvas state and props
-export type CanvasProps = {
-  backgroundImage: HTMLImageElement,  // URL of the initial background image  
-  maxLines: number,                   // Maximum number of lines to be drawn
-  brightness: number,                 // Image brightness
-  contrast: number                    // Image contrast
+type CanvasProps = {
+  backgroundImage: HTMLImageElement,                                            // URL of the initial background image  
+  maxLines: number                                                              // Maximum number of lines to be drawn
 }
 type CanvasState = {
-  height: number,                     // Height of the canvas
-  width: number,                      // Width of the canvas
-  pixelLines: PixelLine[],            // Pixelated lines to be plotted in the canvas
-  lines: FluidLine[],                 // Fluid lines to be plotted in the canvas
-  editMode: boolean                   // Whether canvas edition is enabled or not
+  height: number,                                                               // Height of the canvas
+  width: number,                                                                // Width of the canvas
+  lines: AbstractLine[],                                                        // Either the array of pixelLines or fluidLines
+  pixelLines: PixelLine[],                                                      // Pixelized lines to be plotted in the canvas
+  fluidLines: FluidLine[],                                                      // Fluid lines to be plotted in the canvas
+  editMode: boolean                                                             // Whether canvas edition is enabled or not
 }
 
+// FIXME rendering pixel lines is slower
+
 export class Canvas extends React.Component<CanvasProps, CanvasState> {
-  // Default scale factor, line width and line color
-  private static scaleFactor: number = 1.1;         
-  private static lineWidth: number = 1;
-  private static lineColor: string = '#00FF00';
+  // Default properties of the Canvas class
+  private static scaleFactor: number = 1.1;                                     // Scale factor applied per click or mouse wheel rotation
+  private static maxZoomOut: number = 0.2;                                      // Maximum zoomout factor
+  private static lineWidth: number = 1;                                         // Line width
+  private static lineColor: string = '#00FF00';                                 // Line color
 
-  // SVG library FIXME do i need it?
-  private svg = document.createElementNS("http://www.w3.org/2000/svg",'svg');  
+  // Brightness settings
+  private static _defaultBrightness = 100;                                     
+  private static _maxBrightness = 200;
+  private static _minBrightness = 0;
 
-  // Current and previous transformation matrices
-  private xform: DOMMatrix = this.svg.createSVGMatrix();                       
-  private savedTransforms: DOMMatrix[] = [];      
-  
-  // Start and end mouse click positions
-  private startPoint: Point = { x: 0, y: 0 }
-  private endPoint: Point = { x: 0, y: 0 }
+  // Contrast settings
+  private static _defaultContrast = 100;      
+  private static _maxContrast = 1000;
+  private static _minContrast = 0;                                  
 
-  // Canvas reference, rendering context and state
-  private canvasRef: React.RefObject<HTMLCanvasElement>;
-  private ctx: CanvasRenderingContext2D | null = null;
-  state: CanvasState = { height: 512, width: 512, lines: [], editMode: true, pixelLines: []};
 
   // User-interaction state
-  private mouseIsDown: boolean = false;     // Indicates whether the mouse is currently down
-  private dragStart: Point | null = null;   // Point where the user started dragging or null
-  private dragged: boolean = true;          // Indicates whether the user has finished dragging or not
-  private zoomFactor: number = 1;           // Current zoom factor
-  private lastObjectType: typeof FluidLine | typeof PixelLine | null = null;   // Indicates the type last object added by the user, allowing to undo operation.
+  private mouseIsDown: boolean = false;                                         // Indicates whether the mouse is currently down
+  private dragStart: Point | null = null;                                       // Point where the user started dragging or null
+  private dragged: boolean = true;                                              // Whether the image has finished being dragged
+  private zoomFactor: number = 1;                                               // Current zoom factor
+  private startPoint: Point = { x: 0, y: 0 };                                   // Starting mouse click position
+  private endPoint: Point = { x: 0, y: 0 };                                     // Final mouse click position
+  private lastObjectType: typeof FluidLine | typeof PixelLine | null = null;    // Type of the last object added, allowing to undo operations
+
+  // Canvas elements
+  private canvasRef: React.RefObject<HTMLCanvasElement>;                        // Canvas reference
+  private ctx: CanvasRenderingContext2D | null = null;                          // Canvas rendering context
+  private _brightness: number;                                                  // Brightness filter
+  private _contrast: number;                                                    // Contrast filter
+  private svg = document.createElementNS("http://www.w3.org/2000/svg",'svg');   // SVG namespace, used as an auxiliary for the transformation
+  private xform: DOMMatrix = this.svg.createSVGMatrix();                        // Transformation matrix between the initial canvas context and the current one
+  private savedTransforms: DOMMatrix[] = [];                                    // Stack of saved transformation
+
+  // Initial canvas state
+  state: CanvasState = {                                          
+    height: 512, 
+    width: 512, 
+    lines: [],
+    pixelLines: [],
+    fluidLines: [], 
+    editMode: true
+  };
   
+  /* ********************************************************************** */
   // Image data extracted from the canvas' background image
   private originalImageData: ImageData | undefined | null = null;
   //private updatedImageData: ImageData | undefined | null = null;
   private promiseNumber: number = 0;        // Promises counter
-
-  // Image filters
-  private _brightness: number;
-  private _contrast: number;
+  /* ********************************************************************** */
 
   // Creates a reference to the canvas and sets the initial state
   constructor(props: CanvasProps) {
     super(props);
-    this._brightness = this.props.brightness;
-    this._contrast = this.props.contrast;
+    this._brightness = Canvas.defaultBrightness;
+    this._contrast = Canvas.defaultContrast;
     this.canvasRef = React.createRef();
     this.props.backgroundImage.onload = () => {
       // Use a promise so that the program waits for the image to be draw to get its data
@@ -101,29 +117,36 @@ export class Canvas extends React.Component<CanvasProps, CanvasState> {
     }
   }
 
+  componentDidUpdate() {
+    this.redraw();
+  }
+
   // Before the component umnounts, remove the wheel event listener
   componentWillUnmount() {
     this.canvasRef.current?.removeEventListener('wheel', this.handleScroll, { passive: false} as EventListenerOptions);
   }
 
-  componentDidUpdate() {
-    this._contrast = this.props.contrast;
-    this._brightness = this.props.brightness;
-    this.redraw();
+  // Getters
+  public getOriginalImageData = (): Uint8ClampedArray | undefined | null => { 
+    // Returns a clone, to the prevent data corruption from the outside
+    return this.originalImageData?.data.map((x) => x); 
   }
-
-  // Returns a clone of the the image data object, preventing the image from being tampered with outside this class
-  public getOriginalImageData(): Uint8ClampedArray | undefined | null { return this.originalImageData?.data.map((x) => x); }
-  public getLines(): FluidLine[] { return this.state.lines; }
-  public getPixelLines(): PixelLine[] { return this.state.pixelLines; }
-  public getHeight(): number { return this.state.height }
-  public getWidth(): number { return this.state.width }
-
-
-  public get brightness() { return this._brightness }
-  public get contrast() { return this._contrast }
+  public get lines(): AbstractLine[] { return this.state.lines }
+  public get height(): number { return this.state.height }
+  public get width(): number { return this.state.width }
+  public get brightness(): number { return this._brightness }
+  public static get defaultBrightness(): number { return Canvas._defaultBrightness }
+  public static get maxBrightness(): number { return Canvas._maxBrightness }
+  public static get minBrightness(): number { return Canvas._minBrightness }
+  public get contrast(): number { return this._contrast }
+  public static get defaultContrast(): number { return Canvas._defaultContrast }
+  public static get maxContrast(): number { return Canvas._maxContrast }
+  public static get minContrast(): number { return Canvas._minContrast }
   
-  public set brightness(brightness: number) {
+  // Setters
+  public static set defaultBrightness(defaultBrightness: number) { Canvas._defaultBrightness = defaultBrightness }
+  public static set defaultContrast(defaultContrast: number) { Canvas._defaultContrast = defaultContrast }
+  public set brightness(brightness: number) { 
     this._brightness = brightness;
     this.redraw();
   }
@@ -131,69 +154,88 @@ export class Canvas extends React.Component<CanvasProps, CanvasState> {
     this._contrast = contrast;
     this.redraw();
   }
-
-  // Sets the brightness and contrast filte values
-  public setFilters(brightness: number, contrast: number ) {
+  public setFilters = (brightness: number, contrast: number) => {
     this.contrast = contrast;
     this.brightness = brightness;
     this.redraw();
   }
 
+  /***************************************************************************************************/
+  /****************************************** Public methods *****************************************/
+  /***************************************************************************************************/
 
-  // Add a line to the canvas
-  public addLine = (line: FluidLine, save: boolean = true) => {
-    if(this.state.lines.length < this.props.maxLines) {
+  /************************ Line addition and stenosis percentage computation ************************/
+  // Add a fluid line to the canvas, if the number of fluid lines is below the maximum and there are no pixel lines
+  public addFluidLine = (line: FluidLine, save: boolean = true) => {
+    if(this.state.fluidLines.length < this.props.maxLines && this.state.pixelLines.length === 0) {
       this.lastObjectType = FluidLine;
       line.draw(this.ctx as CanvasRenderingContext2D);
       if(save) {
         this.setState(prevState => ({
           lines: [...prevState.lines, line],
+          fluidLines: [...prevState.fluidLines, line],
           editMode: this.state.editMode && prevState.lines.length + 1 < this.props.maxLines
         }));
       }
     }
   }
 
-  // Add a pixel line to the canvas
+  // Add a pixel line to the canvas, if the number of pixel lines is below the maximum and there are no fluid lines
   public addPixelLine = (pixelLine: PixelLine, save: boolean = true) => {
-    if(this.state.pixelLines.length < this.props.maxLines) {
+    if(this.state.pixelLines.length < this.props.maxLines && this.state.fluidLines.length === 0) {
       this.lastObjectType = PixelLine;
       pixelLine.draw(this.ctx as CanvasRenderingContext2D);
       if(save) {
         this.setState(prevState => ({
+          lines: [...prevState.lines, pixelLine],
           pixelLines: [...prevState.pixelLines, pixelLine],
-          editMode: this.state.editMode && prevState.pixelLines.length + 1 < this.props.maxLines
+          editMode: this.state.editMode && prevState.lines.length + 1 < this.props.maxLines
         }));
       }
     }
   }
 
-
-
   // Given the three drawn lines or pixel lines, computes the associated diameter stenosis percentage
-  public computeDiameterStenosisPercentage = () => {
+  public computeDiameterStenosisPercentage = (): number | undefined => {
     var lengthsArray: number[] = [];
-    if(this.state.lines.length !== this.props.maxLines && this.state.pixelLines.length !== this.props.maxLines) return undefined;
-    else if(this.state.lines.length === this.props.maxLines) {
-      lengthsArray = this.state.lines.map((line) => { return line.length; });
-    } else if(this.state.pixelLines.length === this.props.maxLines) {
-      lengthsArray = this.state.pixelLines.map((pixelLine) => { return pixelLine.length; });
-    }
-    lengthsArray = lengthsArray.sort((a, b) => a - b);
+    if(this.lines.length !== this.props.maxLines) return undefined;
+    else lengthsArray = this.lines.map(line => line.length).sort((a, b) => a - b);
     return 2 * lengthsArray[0] / (lengthsArray[1] + lengthsArray[2]) * 100;
   }
 
   // Given the three drawn lines or pixel lines, computes the associated area stenosis percentage
-  public computeAreaStenosisPercentage = () => {
+  public computeAreaStenosisPercentage = (): number | undefined => {
     var lengthsArray: number[] = [];
-    if(this.state.lines.length !== this.props.maxLines && this.state.pixelLines.length !== this.props.maxLines) return undefined;
-    else if(this.state.lines.length === this.props.maxLines) {
-      lengthsArray = this.state.lines.map((line) => { return line.length; });
-    } else if(this.state.pixelLines.length === this.props.maxLines) {
-      lengthsArray = this.state.pixelLines.map((pixelLine) => { return pixelLine.length; });
-    }
-    lengthsArray = lengthsArray.sort((a, b) => a - b);
+    if(this.lines.length !== this.props.maxLines) return undefined;
+    else lengthsArray = this.lines.map(line => line.length).sort((a, b) => a - b);
     return 2 * Math.PI * Math.pow(0.5*lengthsArray[0], 2) / ( Math.PI * Math.pow(0.5*lengthsArray[1], 2) + Math.PI * Math.pow(0.5*lengthsArray[2], 2)) * 100;
+  }
+
+  /******************************* Download and download URL functions *******************************/
+  public getDownloadURL = (): string => {
+    this.ctx?.restore();
+    this.ctx?.save();
+    this.clearCanvas();
+    this.ctx?.putImageData(this.originalImageData as ImageData, 0, 0);
+    this.state.fluidLines.forEach((fluidLine) => fluidLine.draw(this.ctx as CanvasRenderingContext2D));
+    this.state.pixelLines.forEach((pixelLine) => pixelLine.draw(this.ctx as CanvasRenderingContext2D));
+    return this.canvasRef.current ? this.canvasRef.current.toDataURL("image/png") : "";
+  }
+
+  private downloadImage = () => {
+    saveAs(this.getDownloadURL(), 'file.png');
+  }
+
+  /***************************************************************************************************/
+  /**************************************** Private functions ****************************************/
+  /***************************************************************************************************/
+
+  /***************************************** Canvas drawing ******************************************/
+  // Clear the entire canvas
+  private clearCanvas = () => {
+    let p1 = this.transformPoint({x: 0, y: 0});
+    let p2 = this.transformPoint({x: this.canvasRef.current?.width as number, y: this.canvasRef.current?.height as number});
+    this.ctx?.clearRect(p1.x, p1.y, p2.x - p1.x, p2.y - p1.y);
   }
 
   // Clear the canvas, redraw all its elements, and update the image data object
@@ -203,11 +245,12 @@ export class Canvas extends React.Component<CanvasProps, CanvasState> {
     let brightnessFilter = "brightness(" + this.brightness + "%)";
     let contrastFilter = "contrast(" + this.contrast + "%)";
     (this.ctx as CanvasRenderingContext2D).filter = brightnessFilter + contrastFilter;
-    this.state.lines.forEach((line) => line.draw(this.ctx as CanvasRenderingContext2D));
+    this.state.fluidLines.forEach((fluidLine) => fluidLine.draw(this.ctx as CanvasRenderingContext2D));
     this.state.pixelLines.forEach((pixelLine) => pixelLine.draw(this.ctx as CanvasRenderingContext2D));
   }
 
-  // Get the (x, y) position of MouseEvent e
+  /****************************************** Mouse events *******************************************/
+  // Get the (x, y) position of the mouse event e
   private getMouseEventPosition = (e: React.MouseEvent<HTMLCanvasElement, MouseEvent>): Point => {
     return {
       x: e.pageX - (e.target as HTMLCanvasElement).offsetLeft,
@@ -215,144 +258,121 @@ export class Canvas extends React.Component<CanvasProps, CanvasState> {
     };
   }
 
-  // Transform point from page coordinates to canvas coordinates
-  private transformPoint = (p: Point): Point => {
-    return (this.ctx as any).transformedPoint(p);
-  }
-
-  // Clear the entire canvas
-  private clearCanvas = () => {
-    let p1 = this.transformPoint({x: 0, y: 0});
-    let p2 = this.transformPoint({x: this.canvasRef.current?.width as number, y: this.canvasRef.current?.height as number});
-    this.ctx?.clearRect(p1.x, p1.y, p2.x - p1.x, p2.y - p1.y);
-  }
-
-  public getDownloadURL = (): string => {
-    this.ctx?.restore();
-    this.ctx?.save();
-    this.clearCanvas();
-    this.ctx?.putImageData(this.originalImageData as ImageData, 0, 0);
-    this.state.lines.forEach((line) => line.draw(this.ctx as CanvasRenderingContext2D));
-    this.state.pixelLines.forEach((pixelLine) => pixelLine.draw(this.ctx as CanvasRenderingContext2D));
-    return this.canvasRef.current ? this.canvasRef.current.toDataURL("image/png") : "";
-  }
-
-  private downloadImage = () => {
-    this.ctx?.restore();
-    this.ctx?.save();
-    this.clearCanvas();
-    this.ctx?.putImageData(this.originalImageData as ImageData, 0, 0);
-    this.state.lines.forEach((line) => line.draw(this.ctx as CanvasRenderingContext2D));
-    this.state.pixelLines.forEach((pixelLine) => pixelLine.draw(this.ctx as CanvasRenderingContext2D));
-    saveAs(this.canvasRef.current?.toDataURL("image/png") as string, 'file.png');
-  }
-
-  // If the program is in editting mode, start drawing a line. Otherwise, start a drag
+  // In editing mode, register the position and that the mouse is down. Otherwise, start a drag
   private handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement, MouseEvent>) => {
     this.startPoint = this.getMouseEventPosition(e);
-    
-    if(this.state.editMode && this.state.lines.length < this.props.maxLines) {
-      this.mouseIsDown = true;
-    } else {
+    if(this.state.editMode) this.mouseIsDown = true;
+    else {
       this.dragStart = this.transformPoint(this.startPoint);
       this.dragged = false;
     }
   }
 
-  // If the program is in edit mode and the mouse is down, draw a line and put the mouse up
+  // In editing mode with the mouse down, draw a line, and put the mouse up. Otherwise, finish a drag
   private handleMouseLeave = (e: React.MouseEvent<HTMLCanvasElement, MouseEvent>) => {  
-    this.dragged = true;  
-    this.dragStart = null;
-    if(this.state.editMode && this.mouseIsDown && this.state.lines.length < this.props.maxLines) {
+    if(this.state.editMode && this.mouseIsDown) {
       this.mouseIsDown = false;
-      this.addLine(new FluidLine(this.transformPoint(this.startPoint), this.transformPoint(this.endPoint)));
-      this.setState({ editMode: this.state.editMode && this.state.lines.length < this.props.maxLines});
+      this.addFluidLine(new FluidLine(this.transformPoint(this.startPoint), this.transformPoint(this.endPoint)));
+      this.setState({ editMode: this.state.editMode && this.state.fluidLines.length < this.props.maxLines});
+    } else {
+      this.dragged = true;
+      this.dragStart = null;
     }
   }
 
-  // If the program is in edit mode and the mouse was down, draw a line. If the program was not in edit mode,
-  // and the image had not been dragged, zoom
+  // In editing mode, if the mouse is down, draw a line. Otherwise, if the image was not in the middle of a drag, zoom
   private handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement, MouseEvent>) => {
     this.endPoint = this.getMouseEventPosition(e);
-
-    if(this.state.editMode && this.state.lines.length < this.props.maxLines) {
+    if(this.state.editMode) {
       if(this.mouseIsDown) {
         let lastPt = this.transformPoint(this.endPoint);
         this.mouseIsDown = false;
-        this.addLine(new FluidLine(this.transformPoint(this.startPoint), lastPt));
+        this.addFluidLine(new FluidLine(this.transformPoint(this.startPoint), lastPt));
       }
     } else {
+      if(this.dragged) this.zoom(e.shiftKey ? -1 : 1);
       this.dragStart = null;
-      if(!this.dragged) this.zoom(e.shiftKey ? -1 : 1);
     }
   }
 
+  // In editing mode, if the mouse is down, draw a line from between the mouse click point and the current one. 
+  // Otherwise, if a drag has been started, continue it
   private handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement, MouseEvent>) => {
     this.endPoint = this.getMouseEventPosition(e);
-    if(this.state.editMode && this.state.lines.length < this.props.maxLines) {
+    if(this.state.editMode) {
       if(this.mouseIsDown) {
         this.redraw();
         new FluidLine(this.transformPoint(this.startPoint), this.transformPoint(this.endPoint)).draw(this.ctx as CanvasRenderingContext2D);
       }
-    } else {
-      this.dragged = true;
-      if(this.dragStart) {
-        let pt = this.transformPoint(this.endPoint);
-        this.ctx?.translate(pt.x - this.dragStart.x, pt.y - this.dragStart.y);
-        this.redraw();
-      }
+    } else if (this.dragStart) {
+      let pt = this.transformPoint(this.endPoint);
+      this.ctx?.translate(pt.x - this.dragStart.x, pt.y - this.dragStart.y);
+      this.redraw();
     }
   }
 
-  // Zoom-in/out as a function of the number of clicks
-  private zoom = (clicks: number) => {
-    let pt = this.transformPoint(this.endPoint);
-    this.ctx?.translate(pt.x, pt.y);
-
-    // Compute the zoom factor as a function of the number of clicks 
-    let factor = Math.pow(Canvas.scaleFactor, clicks);
-    // Prevent the total zoom factor from being less than 1
-    if(this.zoomFactor * factor < 1) factor = 1 / this.zoomFactor;
-    this.zoomFactor *= factor;
-    this.ctx?.scale(factor, factor);
-    this.ctx?.translate(-pt.x, -pt.y);
-    this.redraw();
-  }
-  
   // Zoom based on the scroll length and direction
-  private handleScroll = (e: any) => {
-    e.preventDefault(); //e.stopPropagation();
+  private handleScroll = (e: WheelEvent) => {
+    e.preventDefault();
     let delta = e.deltaY ? - e.deltaY/40 : e.detail ? e.detail : 0;
     if(delta) this.zoom(delta);
   }
 
-  private handleChange = () => {
-    this.setState({editMode: !this.state.editMode && this.state.lines.length < this.props.maxLines});
+  /****************************************** Button clicks ******************************************/
+  // Set editMode based on the previous editMode value and the number of lines drawn on the canvas
+  private toggleEdit = () => {
+    this.setState({editMode: !this.state.editMode && this.state.fluidLines.length < this.props.maxLines});
   }
 
-  private handleUndo = () => {
-    if(this.lastObjectType === FluidLine && this.state.lines.length !== 0) {
+  // Undo the last action, which can be a FluidLine or PixelLine draw
+  private undoLast = () => {
+    if(this.lastObjectType === FluidLine) {
       this.setState(prevState => ({
         lines: prevState.lines.slice(0, prevState.lines.length - 1),
-        editMode: prevState.lines.length - 1 < this.props.maxLines
+        fluidLines: prevState.fluidLines.slice(0, prevState.fluidLines.length - 1),
+        editMode: prevState.fluidLines.length - 1 < this.props.maxLines
       }));
-    } else if(this.lastObjectType === PixelLine && this.state.pixelLines.length !== 0) {
+    } else if(this.lastObjectType === PixelLine) {
       this.setState(prevState => ({
+        lines: prevState.lines.slice(0, prevState.lines.length - 1),
         pixelLines: prevState.pixelLines.slice(0, prevState.pixelLines.length - 1),
         editMode: prevState.pixelLines.length - 1 < this.props.maxLines
       }));
     }
   }
 
-  // Undo all drawings 
+  // Undo all drawings and transformations 
   public undoAll = () => {
+    this.lastObjectType = null;
     this.setState({
       lines: [],
+      fluidLines: [],
       pixelLines: [],
       editMode: true
     });
     this.ctx?.restore();
     this.ctx?.save();
+    this.redraw();
+  }
+
+  /**************************************** Canvas transforms ****************************************/
+  // Transform point from normal coordinates to transformed coordinates
+  private transformPoint = (p: Point): Point => {
+    return (this.ctx as any).transformedPoint(p);
+  }
+
+  // Zoom-in/out as a function of the input magnitude
+  private zoom = (magnitude: number) => {
+    let pt = this.transformPoint(this.endPoint);
+    this.ctx?.translate(pt.x, pt.y);
+
+    // Compute the zoom factor as a function of the number of clicks 
+    let factor = Math.pow(Canvas.scaleFactor, magnitude);
+    // Prevent the total zoom factor from being less than Canvas.maxZoomOut
+    if(this.zoomFactor * factor < Canvas.maxZoomOut) factor = Canvas.maxZoomOut / this.zoomFactor;
+    this.zoomFactor *= factor;
+    this.ctx?.scale(factor, factor);
+    this.ctx?.translate(-pt.x, -pt.y);
     this.redraw();
   }
 
@@ -429,63 +449,42 @@ export class Canvas extends React.Component<CanvasProps, CanvasState> {
     }
   }
 
-  public render(): JSX.Element {
+  /***************************************** Render method *******************************************/
+  public render = (): JSX.Element => {
     return (
-    <div>
-        <canvas 
-          ref={this.canvasRef} 
-          height={this.state.height} 
-          width={this.state.width} 
-          onMouseDown={this.handleMouseDown}
-          onMouseUp={this.handleMouseUp}
-          onMouseLeave={this.handleMouseLeave}
-          onMouseMove={this.handleMouseMove}
-        >
-        </canvas>
-        <br></br>
-        <FormControlLabel 
-          label="Edit" 
-          control={
-            <Switch 
-              onChange={this.handleChange} 
-              checked={this.state.editMode} 
-              inputProps={{ 'aria-label': 'controlled' }}
-        />}></FormControlLabel>
-        <IconButton color="primary" component="span" onClick={this.undoAll}><ClearIcon/></IconButton>
-        <IconButton color="primary" component="span" onClick={this.handleUndo}><UndoIcon/></IconButton>
-        {
-          this.state.lines && this.state.pixelLines.length === 0 &&
-            this.state.lines.map((line, index) => {
-              return (  
-                <p key={"line" + index}>{Math.round(line.length*100)/100}</p>
-              );
-            })  
-        }
-        {
-          this.state.lines.length === this.props.maxLines && this.state.pixelLines.length === 0 &&
-            <p>Diameter stenosis percentage: {Math.round(this.computeDiameterStenosisPercentage() as number * 100) / 100}%</p>
-        }
-        {
-          this.state.lines.length === this.props.maxLines && this.state.pixelLines.length === 0 &&
-            <p>Area stenosis percentage: {Math.round(this.computeAreaStenosisPercentage() as number * 100) / 100}%</p>
-        }
-        {
-          this.state.pixelLines && this.state.lines.length === 0 &&
-            this.state.pixelLines.map((pixelLine, index) => {
-              return (  
-                <p key={"pixelLine" + index}>{Math.round(pixelLine.length*100)/100}</p>
-              );
-            })  
-        }
-        {
-          this.state.pixelLines.length === this.props.maxLines && this.state.lines.length === 0 &&
-            <p>Diameter stenosis percentage: {Math.round(this.computeDiameterStenosisPercentage() as number * 100) / 100}%</p>
-        }
-        {
-          this.state.pixelLines.length === this.props.maxLines && this.state.lines.length === 0 &&
-            <p>Area stenosis percentage: {Math.round(this.computeAreaStenosisPercentage() as number * 100) / 100}%</p>
-        }
-        <Button onClick={this.downloadImage}>Download</Button>
+      <div>
+        <div>
+          <canvas 
+            ref={this.canvasRef} 
+            height={this.state.height} 
+            width={this.state.width} 
+            onMouseDown={this.handleMouseDown}
+            onMouseUp={this.handleMouseUp}
+            onMouseLeave={this.handleMouseLeave}
+            onMouseMove={this.handleMouseMove}
+          >
+          </canvas>
+        </div>
+        <div>
+          <FormControlLabel label="Edit" control={
+              <Switch onChange={this.toggleEdit} checked={this.state.editMode} inputProps={{ 'aria-label': 'controlled' }}/>
+          }></FormControlLabel>
+          <IconButton color="primary" component="span" onClick={this.undoAll}><ClearIcon/></IconButton>
+          <IconButton color="primary" component="span" onClick={this.undoLast}><UndoIcon/></IconButton>
+          <Button onClick={this.downloadImage}>Download</Button>
+          {// Print line diameters
+            this.state.lines.length !== 0 &&
+              this.state.lines.map((line, index) => <p key={"line" + index}>{Math.round(line.length*100)/100}</p>)
+          }
+          {// Print diameter stenosis
+            this.state.lines.length === this.props.maxLines &&
+              <p>Diameter stenosis percentage: {Math.round(this.computeDiameterStenosisPercentage() as number * 100) / 100}%</p>            
+          }
+          {// Print area stenosis
+            this.state.lines.length === this.props.maxLines &&
+              <p>Area stenosis percentage: {Math.round(this.computeAreaStenosisPercentage() as number * 100) / 100}%</p>            
+          }
+        </div>
       </div>
     );
   }

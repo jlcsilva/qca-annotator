@@ -1,6 +1,6 @@
-import { GenericLine } from "./GenericLine";
+import GenericLine from "./AbstractLine";
 
-// Class for a fluid line drawn using the canvas Line2D API, with sub-pixel precision
+// Class for a fluid line drawn using the canvas canvas API, with sub-pixel precision
 export class FluidLine extends GenericLine {
     // Draw the line on the canvas associated to the given context
     public draw(ctx: CanvasRenderingContext2D) {
