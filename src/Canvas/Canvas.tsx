@@ -24,6 +24,7 @@ type CanvasState = {
 }
 
 // FIXME rendering pixel lines is slower
+// FIXME does not work for images of different sizes
 
 export class Canvas extends React.Component<CanvasProps, CanvasState> {
   // Default properties of the Canvas class
@@ -74,7 +75,6 @@ export class Canvas extends React.Component<CanvasProps, CanvasState> {
   /* ********************************************************************** */
   // Image data extracted from the canvas' background image
   private originalImageData: ImageData | undefined | null = null;
-  //private updatedImageData: ImageData | undefined | null = null;
   private promiseNumber: number = 0;        // Promises counter
   /* ********************************************************************** */
 
@@ -84,18 +84,17 @@ export class Canvas extends React.Component<CanvasProps, CanvasState> {
     this._brightness = Canvas.defaultBrightness;
     this._contrast = Canvas.defaultContrast;
     this.canvasRef = React.createRef();
+
     this.props.backgroundImage.onload = () => {
       // Use a promise so that the program waits for the image to be draw to get its data
       let promiseCount = ++this.promiseNumber;
       new Promise((resolve) => {
         this.ctx?.drawImage(this.props.backgroundImage, 0, 0);
         resolve(promiseCount);
-      }).then(() => {
-        this.originalImageData = this.ctx?.getImageData(0, 0, this.state.width, this.state.height);
-      })
+      }).then(() => this.originalImageData = this.ctx?.getImageData(0, 0, this.state.width, this.state.height))
       
       this.setState(
-        { height: this.props.backgroundImage.height, width: this.props.backgroundImage.width},
+        { height: this.props.backgroundImage.height, width: this.props.backgroundImage.width}
       );
     }
   }
