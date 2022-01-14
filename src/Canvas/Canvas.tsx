@@ -25,6 +25,7 @@ type CanvasState = {
 
 // FIXME rendering pixel lines is slower
 // FIXME does not work for images of different sizes
+// FIXME the image.onload method in the constructor expects the canvas rendering context object to be available, which might not be true
 
 export class Canvas extends React.Component<CanvasProps, CanvasState> {
   // Default properties of the Canvas class
@@ -43,7 +44,6 @@ export class Canvas extends React.Component<CanvasProps, CanvasState> {
   private static _maxContrast = 1000;
   private static _minContrast = 0;                                  
 
-
   // User-interaction state
   private mouseIsDown: boolean = false;                                         // Indicates whether the mouse is currently down
   private dragStart: Point | null = null;                                       // Point where the user started dragging or null
@@ -61,6 +61,8 @@ export class Canvas extends React.Component<CanvasProps, CanvasState> {
   private svg = document.createElementNS("http://www.w3.org/2000/svg",'svg');   // SVG namespace, used as an auxiliary for the transformation
   private xform: DOMMatrix = this.svg.createSVGMatrix();                        // Transformation matrix between the initial canvas context and the current one
   private savedTransforms: DOMMatrix[] = [];                                    // Stack of saved transformation
+  private originalImageData: ImageData | undefined | null = null;               // Image data extracted from the background image
+  private promiseNumber: number = 0;                                            // Number of the promise used to wait for the images to load
 
   // Initial canvas state
   state: CanvasState = {                                          
@@ -71,12 +73,6 @@ export class Canvas extends React.Component<CanvasProps, CanvasState> {
     fluidLines: [], 
     editMode: true
   };
-  
-  /* ********************************************************************** */
-  // Image data extracted from the canvas' background image
-  private originalImageData: ImageData | undefined | null = null;
-  private promiseNumber: number = 0;        // Promises counter
-  /* ********************************************************************** */
 
   // Creates a reference to the canvas and sets the initial state
   constructor(props: CanvasProps) {
