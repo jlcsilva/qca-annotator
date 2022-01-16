@@ -195,7 +195,7 @@ export class Canvas extends React.Component<CanvasProps, CanvasState> {
     var lengthsArray: number[] = [];
     if(this.lines.length !== this.props.maxLines) return undefined;
     else lengthsArray = this.lines.map(line => line.length).sort((a, b) => a - b);
-    return 2 * lengthsArray[0] / (lengthsArray[1] + lengthsArray[2]) * 100;
+    return 1 - 2 * lengthsArray[0] / (lengthsArray[1] + lengthsArray[2]) * 100;
   }
 
   // Given the three drawn lines or pixel lines, computes the associated area stenosis percentage
@@ -203,7 +203,7 @@ export class Canvas extends React.Component<CanvasProps, CanvasState> {
     var lengthsArray: number[] = [];
     if(this.lines.length !== this.props.maxLines) return undefined;
     else lengthsArray = this.lines.map(line => line.length).sort((a, b) => a - b);
-    return 2 * Math.PI * Math.pow(0.5*lengthsArray[0], 2) / ( Math.PI * Math.pow(0.5*lengthsArray[1], 2) + Math.PI * Math.pow(0.5*lengthsArray[2], 2)) * 100;
+    return 1 - 2 * Math.PI * Math.pow(0.5*lengthsArray[0], 2) / ( Math.PI * Math.pow(0.5*lengthsArray[1], 2) + Math.PI * Math.pow(0.5*lengthsArray[2], 2)) * 100;
   }
 
   /******************************* Download and download URL functions *******************************/
